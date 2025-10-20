@@ -1,0 +1,58 @@
+#!/bin/bash
+# ==============================================================================
+#                      fp.sh: Automated Fastp QC for All Samples
+# ==============================================================================
+# This script automatically finds all paired-end samples in the raw data
+# directory, runs fastp for quality control on each of them, and does not
+# generate the HTML report.
+# --- Exit on any error ---
+set -e
+# --- 1. 定义通用变量 ---
+# 输入目录
+RAW_DATA_DIR="../0.rawdata"
+# 输出目录
+OUT_DIR="results"
+# 全局参数
+THREADS=8
+LENGTH_REQUIRED=150
+# --- 2. 准备工作 ---
+# 创建输出目录
+echo "--- [准备工作] 确保输出目录存在: ${QC_OUT_DIR} ---"
+mkdir -p "${QC_OUT_DIR}"
+# --- 3. 自动化核心：发现样本并循环处理 ---
+# 我们使用 'for' 循环来遍历所有匹配 '*_1.fq.gz' 模式的文件。
+# 'basename' 命令用于从完整路径中提取文件名。
+# 'sed' 命令用于从文件名中精确地提取出样本的基础名。
+echo "--- [核心处理] 开始查找并处理所有样本... ---"
+for READ1_IN in ${RAW_DATA_DIR}/*_1.fq.gz; do
+    # --- 3.1. 为当前样本动态生成变量 ---
+     # 从R1文件路径中提取样本名 (e.g., from '../0.rawdata/X6_1_1.fq.gz' -> 'X6_1')
+    SAMPLE_NAME=$(basename "${READ1_IN}" | sed 's/_1\.fq\.gz$//')
+    echo ">>> 正在处理样本: ${SAMPLE_NAME}"
+    echo "--------------------------------------------------------"
+ # 根据样本名，构建对应的R2输入文件和其他输出文件路径
+    READ2_IN="${RAW_DATA_DIR}/${SAMPLE_NAME}_2.fq.gz"
+    READ1_OUT="${QC_OUT_DIR}/${SAMPLE_NAME}_clean_1.fastq.gz"
+    READ2_OUT="${QC_OUT_DIR}/${SAMPLE_NAME}_clean_2.fastq.gz"
+ # --- 3.2. 健全性检查 ---
+    # 在运行前，检查当前样本的R2文件是否存在
+    if [ ! -f "${READ2_IN}" ]; then
+        echo "[警告] 找不到样本 ${SAMPLE_NAME} 对应的R2文件: ${READ2_IN}"
+        echo ">>> 跳过该样本！"
+        # 'continue' 会跳过本次循环，继续处理下一个样本
+        continue
+    fi
+    # --- 3.3. 运行 Fastp (已移除 -h 参数) ---
+    fastp \
+        -i "${READ1_IN}" \
+        -I "${READ2_IN}" \
+        -o "${READ1_OUT}" \
+        -O "${READ2_OUT}" \
+        -l ${LENGTH_REQUIRED} \
+        -w ${THREADS}
+        # -h "${HTML_REPORT}" <-- 这一行已被移除，不再生成报告
+
+done
+
+echo ""
+echo "--- [完成] 所有样本的质控处理已完成。 ---"
