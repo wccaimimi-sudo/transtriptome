@@ -1,1 +1,104 @@
 
+#!/bin/bash
+# ==============================================================================
+#           StringTie 完整流程: 并行组装 (4.1) + 合并 (4.2)
+# ==============================================================================
+# This single script performs the entire StringTie pipeline:
+# 1. Assembles transcripts for each sample in parallel using GNU Parallel.
+# 2. Merges all resulting GTF files into a single, unified annotation.
+set -e
+set -o pipefail
+# ---                       1. 全局变量定义                            ---
+# --- 输入目录 ---
+MAPPING_OUT_DIR="/data1/wcc/transcriptome/3.map/results"
+# --- 中间步骤 (4.1) 的输出目录 ---
+ASSEMBLY_OUT_DIR="/data1/wcc/transcriptome/4.stringtie/4.1results"
+# --- 最终步骤 (4.2) 的输出目录和文件 ---
+MERGE_OUT_DIR="/data1/wcc/transcriptome/4.stringtie/4.2results"
+FINAL_MERGED_GTF="${MERGE_OUT_DIR}/merged_transcripts.gtf"
+# --- 临时文件 ---
+GTF_LIST_FILE="${MERGE_OUT_DIR}/gtf_list.txt"
+# --- 资源配置 ---
+PARALLEL_JOBS=4      # 同时运行4个样本
+THREADS_PER_JOB=16   # 每个StringTie组装任务使用16个线程
+MERGE_THREADS=8      # 合并任务使用的线程数
+# ==============================================================================
+# ---               模块 3.1: 并行化单样本转录本组装                 ---
+# ==============================================================================
+echo "---          开始模块 3.1: 并行化单样本组装          ---"
+# --- 准备工作 ---
+echo "确保组装输出目录存在: ${ASSEMBLY_OUT_DIR}"
+mkdir -p "${ASSEMBLY_OUT_DIR}"
+# --- 发现样本 ---
+echo "正在发现所有BAM文件..."
+SAMPLES=$(find "${MAPPING_OUT_DIR}" -name "*.sorted.bam" | sed "s#${MAPPING_OUT_DIR}/##" | sed 's/\.sorted\.bam$//')
+if [ -z "${SAMPLES}" ]; then
+    echo "[致命错误] 在 '${MAPPING_OUT_DIR}' 目录中没有找到任何 '.sorted.bam' 文件。"
+    exit 1
+fi
+echo "发现了 $(echo "${SAMPLES}" | wc -w) 个样本准备进行组装。"
+# --- 运行 GNU Parallel ---
+echo ""
+echo "--- 开始使用 GNU Parallel 并行组装转录本... ---"
+echo "${SAMPLES}" | parallel -j ${PARALLEL_JOBS} --bar '
+    # --- 并行任务内部 ---
+    # 定义路径和线程数
+    MAPPING_DIR="/data1/wcc/transcriptome/3.map/results"
+    ASSEMBLY_DIR="/data1/wcc/transcriptome/4.stringtie/4.1results"
+    THREADS_PER_TASK=16
+    SAMPLE_ID="{}"
+echo "--- 开始处理样本: ${SAMPLE_ID} ---"
+    SORTED_BAM_IN="${MAPPING_DIR}/${SAMPLE_ID}.sorted.bam"
+    OUTPUT_GTF_OUT="${ASSEMBLY_DIR}/${SAMPLE_ID}.gtf"
+    if [ -s "${OUTPUT_GTF_OUT}" ]; then
+        echo "样本 ${SAMPLE_ID} 的GTF文件已存在，跳过。"
+    else
+        stringtie -p ${THREADS_PER_TASK} -o "${OUTPUT_GTF_OUT}" "${SORTED_BAM_IN}"
+        echo "--- 样本 ${SAMPLE_ID} 处理完成 ---"
+    fi
+'
+
+echo ""
+echo "--- [完成] 模块 4.1: 所有样本的并行组装已完成。 ---"
+
+
+# ==============================================================================
+# ---                   模块 4.2: 合并所有GTF文件                      ---
+# ==============================================================================
+
+echo "---          开始模块 4.2: 合并所有GTF文件           ---"
+# --- 准备工作 ---
+echo "确保合并输出目录存在: ${MERGE_OUT_DIR}"
+mkdir -p "${MERGE_OUT_DIR}"
+echo "正在创建待合并的GTF文件列表..."
+find "${ASSEMBLY_OUT_DIR}" -name "*.gtf" > "${GTF_LIST_FILE}"
+
+if [ ! -s "${GTF_LIST_FILE}" ]; then
+    echo "[致命错误] 找不到任何由模块3.1生成的GTF文件。"
+    exit 1
+fi
+echo "找到了 $(wc -l < "${GTF_LIST_FILE}") 个GTF文件准备进行合并。"
+
+# --- 运行核心命令 ---
+echo ""
+echo "--- 开始使用 StringTie --merge 合并所有GTF文件... ---"
+
+stringtie \
+    --merge \
+    -p ${MERGE_THREADS} \
+    -o "${FINAL_MERGED_GTF}" \
+    "${GTF_LIST_FILE}"
+# --- 验证成功 ---
+echo ""
+echo "--- [验证] 检查合并后的GTF文件... ---"
+if [ -s "${FINAL_MERGED_GTF}" ]; then
+    echo "[成功] 所有转录本已成功合并！"
+    echo "最终的基因注释GTF文件位于: ${FINAL_MERGED_GTF}"
+else
+    echo "[失败] StringTie --merge 运行失败，未能生成输出文件。"
+    exit 1
+fi
+echo ""
+echo "========================================================"
+echo "--- [完成] 整个 StringTie 流程已全部完成。 ---"
+echo "========================================================"
