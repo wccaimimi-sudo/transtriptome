@@ -1,0 +1,47 @@
+#                      模块二: 构建 HISAT2 基因组索引
+# --- 1. 定义变量 ---
+GENOME_FASTA="/data1/liqs/project/temp/trans/genome/GCA_039707655.1_ASM3970765v1_genomic.fna"
+# 输出路径和前缀：我们希望生成的索引文件存放在哪里，以及它们的前缀名是什么。
+# HISAT2会用这个前缀生成一系列.ht21文件。
+HISAT2_INDEX_PREFIX="/data1/wcc/transcriptome/results/0_reference/hisat2_index/genome_index"
+资源配置：我们打算使用多少个CPU核心来加速索引构建。
+THREADS=16
+# --- 2. 健全性检查与准备工作 ---
+# 在执行耗时操作前，先检查输入是否存在，并创建好输出目录。
+echo "--- [准备工作] 检查输入文件和输出目录... ---"
+# 检查参考基因组文件是否存在
+if [ ! -f "${GENOME_FASTA}" ]; then
+    echo "[错误] 找不到参考基因组文件: ${GENOME_FASTA}"
+    echo "请检查路径是否正确。"
+    return 1
+fi
+# 使用 'dirname' 获取索引文件所在的目录路径
+INDEX_DIR=$(dirname "${HISAT2_INDEX_PREFIX}")
+echo "确保输出目录存在: ${INDEX_DIR}"
+mkdir -p "${INDEX_DIR}"
+
+# --- 3. 运行核心命令 ---
+# 这是构建索引的核心步骤。
+echo "--- [核心命令] 开始使用 HISAT2 构建基因组索引... ---"
+echo "基因组: ${GENOME_FASTA}"
+echo "输出前缀: ${HISAT2_INDEX_PREFIX}"
+echo "使用线程数: ${THREADS}"
+echo "日志和进度将显示在下方..."
+# 运行 hisat2-build 命令
+# -p: 指定使用的线程数
+# 第一个参数是输入的FASTA文件
+# 第二个参数是输出的索引文件前缀
+hisat2-build -p ${THREADS} "${GENOME_FASTA}" "${HISAT2_INDEX_PREFIX}"
+# --- 4. 验证成功 ---
+# 检查命令是否成功执行，并确认输出文件已生成。
+echo "--- [验证] 检查索引文件是否已成功生成... ---"
+# 我们现在检查 .1.ht2 (小索引) 或 .1.ht2l (大索引) 是否存在。
+if [ -f "${HISAT2_INDEX_PREFIX}.1.ht2" ] || [ -f "${HISAT2_INDEX_PREFIX}.1.ht2l" ]; then
+    echo "[成功] 索引文件已成功创建！"
+    echo "您可以在以下目录中看到它们:"
+    # 列出所有以 .ht2 或 .ht2l 结尾的文件
+    ls -lh "${INDEX_DIR}"/*.ht2*
+else
+    echo "[失败] 索引构建失败或验证逻辑出错。请手动检查目录: ${INDEX_DIR}"
+    # return 1 # 在交互式终端中，可以注释掉这一行
+fi
