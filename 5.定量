@@ -1,1 +1,86 @@
 
+#!/bin/bash
+#                      模块五: 基因表达定量与TPM转换 
+# This script uses featureCounts to generate a raw gene count matrix,
+# cleans up the header, and then converts the raw counts to TPM values.
+set -e
+set -o pipefail
+# --- 1. 定义变量 ---
+# 输入文件/目录
+MAPPING_OUT_DIR="/data1/wcc/transcriptome/3.map/results"
+MERGED_GTF_FILE="/data1/wcc/transcriptome/4.stringtie/4.2results/merged_transcripts.gtf"
+
+# 输出目录和文件
+COUNTS_OUT_DIR="/data1/wcc/transcriptome/5.counts"
+RAW_COUNTS_TABLE_TMP="${COUNTS_OUT_DIR}/raw_counts.tmp.tsv" # 临时的、带长表头的文件
+RAW_COUNTS_TABLE="${COUNTS_OUT_DIR}/raw_counts.tsv"       # 最终的、干净表头的文件
+TPM_TABLE="${COUNTS_OUT_DIR}/tpm_counts.tsv"
+SUMMARY_FILE="${COUNTS_OUT_DIR}/featureCounts.summary.txt"
+
+# 脚本路径
+TPM_SCRIPT_DIR="/data1/wcc/transcriptome/5.counts" # 假设脚本在该目录下
+TPM_SCRIPT="${TPM_SCRIPT_DIR}/counts_to_tpm.py"
+
+# 全局参数
+THREADS=16
+PROJECT_TYPE="PE"
+
+# --- 2. 健全性检查与准备工作 ---
+echo "--- [准备工作] 检查输入文件和输出目录... ---"
+# (健全性检查部分保持不变)
+if [ ! -f "${MERGED_GTF_FILE}" ]; then echo "[致命错误] 找不到GTF: ${MERGED_GTF_FILE}"; exit 1; fi
+BAM_FILES=$(find "${MAPPING_OUT_DIR}" -name "*.sorted.bam" | sort)
+if [ -z "${BAM_FILES}" ]; then echo "[致命错误] 找不到BAM文件"; exit 1; fi
+echo "找到了 $(echo "${BAM_FILES}" | wc -w) 个BAM文件准备进行定量。"
+mkdir -p "${COUNTS_OUT_DIR}"
+# --- 3. 核心命令 1: 运行 featureCounts ---
+echo "--- [核心命令 1/3] 开始使用 featureCounts 进行基因表达定量... ---"
+PAIRED_PARAM=""
+if [ "${PROJECT_TYPE}" == "PE" ]; then
+    PAIRED_PARAM="-p"
+fi
+# 运行 featureCounts，输出到一个临时文件
+featureCounts \
+    -T ${THREADS} \
+    ${PAIRED_PARAM} \
+    -t exon \
+    -g gene_id \
+    -a "${MERGED_GTF_FILE}" \
+    -o "${RAW_COUNTS_TABLE_TMP}" \
+    ${BAM_FILES}
+mv "${RAW_COUNTS_TABLE_TMP}.summary" "${SUMMARY_FILE}"
+echo "[成功] 原始计数矩阵 (带长表头) 已生成。"
+# --- 4. 核心命令 2: 清理表头 (新增步骤) ---
+echo "--- [核心命令 2/3] 清理计数矩阵的表头... ---"
+# 我们使用 'sed' 命令来处理表头行
+sed '2s|'"${MAPPING_OUT_DIR}"'/||g; 2s/\.sorted\.bam//g' "${RAW_COUNTS_TABLE_TMP}" > "${RAW_COUNTS_TABLE}"
+# 删除临时的、带长表头的文件
+rm "${RAW_COUNTS_TABLE_TMP}"
+echo "[成功] 表头已清理，最终的原始计数矩阵位于: ${RAW_COUNTS_TABLE}"
+# --- 5. 核心命令 3: 计算 TPM ---
+echo "--- [核心命令 3/3] 开始将原始计数转换为 TPM... ---"
+# 确保Python脚本存在
+if [ ! -f "${TPM_SCRIPT}" ]; then echo "[致命错误] 找不到TPM转换脚本: ${TPM_SCRIPT}"; exit 1; fi
+python "${TPM_SCRIPT}" -i "${RAW_COUNTS_TABLE}" -o "${TPM_TABLE}"
+
+# --- 6. 验证成功 ---
+echo ""
+echo "--- [验证] 检查最终的TPM矩阵... ---"
+
+if [ -s "${TPM_TABLE}" ]; then
+    echo "[成功] TPM矩阵已成功创建: ${TPM_TABLE}"
+    echo "定量摘要信息已保存到: ${SUMMARY_FILE}"
+    echo ""
+    echo "最终TPM矩阵的表头预览:"
+    head -n 1 "${TPM_TABLE}"
+    echo ""
+    echo "最终TPM矩阵的前5行内容预览:"
+    head -n 5 "${TPM_TABLE}"
+else
+    echo "[失败] TPM计算失败。请检查上面的命令输出日志。"
+    exit 1
+fi
+echo ""
+echo "========================================================"
+echo "--- [完成] 基因表达定量模块已完成。 ---"
+echo "========================================================"
